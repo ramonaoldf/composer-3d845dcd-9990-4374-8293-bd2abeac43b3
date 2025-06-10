@@ -4,6 +4,7 @@ namespace Laravel\Prompts;
 
 use Closure;
 use Laravel\Prompts\Output\ConsoleOutput;
+use RuntimeException;
 use Symfony\Component\Console\Output\OutputInterface;
 
 abstract class Prompt
@@ -73,30 +74,32 @@ abstract class Prompt
     {
         $this->capturePreviousNewLines();
 
-        if ($this->shouldFallback()) {
+        if (static::shouldFallback()) {
             return $this->fallback();
         }
 
+        $this->checkEnvironment();
+
         register_shutdown_function(function () {
             $this->restoreCursor();
-            $this->terminal()->restoreTty();
+            static::terminal()->restoreTty();
         });
 
-        $this->terminal()->setTty('-icanon -isig -echo');
+        static::terminal()->setTty('-icanon -isig -echo');
         $this->hideCursor();
         $this->render();
 
-        while (($key = $this->terminal()->read()) !== null) {
+        while (($key = static::terminal()->read()) !== null) {
             $continue = $this->handleKeyPress($key);
 
             $this->render();
 
             if ($continue === false || $key === Key::CTRL_C) {
                 $this->restoreCursor();
-                $this->terminal()->restoreTty();
+                static::terminal()->restoreTty();
 
                 if ($key === Key::CTRL_C) {
-                    $this->terminal()->exit();
+                    static::terminal()->exit();
                 }
 
                 return $this->value();
@@ -117,8 +120,8 @@ abstract class Prompt
      */
     protected function capturePreviousNewLines(): void
     {
-        $this->newLinesWritten = method_exists($this->output(), 'newLinesWritten')
-            ? $this->output()->newLinesWritten()
+        $this->newLinesWritten = method_exists(static::output(), 'newLinesWritten')
+            ? static::output()->newLinesWritten()
             : 1;
     }
 
@@ -158,7 +161,7 @@ abstract class Prompt
         }
 
         if ($this->state === 'initial') {
-            $this->output()->write($frame);
+            static::output()->write($frame);
 
             $this->state = 'active';
             $this->prevFrame = $frame;
@@ -171,7 +174,7 @@ abstract class Prompt
         // Ensure that the full frame is buffered so subsequent output can see how many trailing newlines were written.
         if ($this->state === 'submit') {
             $this->eraseDown();
-            $this->output()->write($frame);
+            static::output()->write($frame);
 
             $this->prevFrame = '';
 
@@ -185,7 +188,7 @@ abstract class Prompt
             $this->moveCursor(0, $diffLine);
             $this->eraseLines(1);
             $lines = explode(PHP_EOL, $frame);
-            $this->output()->write($lines[$diffLine]);
+            static::output()->write($lines[$diffLine]);
             $this->moveCursor(0, count($lines) - $diffLine - 1);
         } elseif (count($diff) > 1) { // Re-render everything past the first change
             $diffLine = $diff[0];
@@ -193,7 +196,7 @@ abstract class Prompt
             $this->eraseDown();
             $lines = explode(PHP_EOL, $frame);
             $newLines = array_slice($lines, $diffLine);
-            $this->output()->write(implode(PHP_EOL, $newLines));
+            static::output()->write(implode(PHP_EOL, $newLines));
         }
 
         $this->prevFrame = $frame;
@@ -300,6 +303,16 @@ abstract class Prompt
         if (is_string($error) && strlen($error) > 0) {
             $this->state = 'error';
             $this->error = $error;
+        }
+    }
+
+    /**
+     * Check whether the environment can support the prompt.
+     */
+    private function checkEnvironment(): void
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            throw new RuntimeException('Prompts is not currently supported on Windows. Please use WSL or configure a fallback.');
         }
     }
 }
